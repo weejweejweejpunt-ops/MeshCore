@@ -38,6 +38,9 @@
 #include <helpers/RoutingPolicy.h>
 #include "RateLimiter.h"
 #include "Filter.h"
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+#include <observer/ObserverNodePrefs.h>
+#endif
 
 #ifdef WITH_BRIDGE
 extern AbstractBridge* bridge;
@@ -73,7 +76,11 @@ struct NeighbourInfo {
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.18.0.01"
+  #if defined(SENSECAP_OBSERVER_COC_CHANNELS) && SENSECAP_OBSERVER_COC_CHANNELS > 0
+    #define FIRMWARE_VERSION   "v1.18.0.01-coc"
+  #else
+    #define FIRMWARE_VERSION   "v1.18.0.01-obs544"
+  #endif
 #endif
 
 #define FIRMWARE_ROLE "repeater"
@@ -86,7 +93,11 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint64_t uptime_millis;
   unsigned long next_local_advert, next_flood_advert;
   bool _logging;
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+  observer::ObserverNodePrefs _prefs;
+#else
   NodePrefs _prefs;
+#endif
   ClientACL  acl;
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
@@ -239,6 +250,24 @@ public:
   void clearStats() override;
 
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+  bool handleObserverCommand(char* command, char* reply);
+  bool handleUsbObserverCommand(char* command, char* reply);
+  bool observerEnabled() const { return _prefs.observer_version_ == observer::ObserverNodePrefs::kObserverVersion && _prefs.observer_enabled == 1; }
+  bool observerHasPeer() const { return _prefs.observer_version_ == observer::ObserverNodePrefs::kObserverVersion && _prefs.observer_peer_present == 1; }
+  observer::PeerIdentity observerPeer() const {
+    observer::PeerIdentity peer{};
+    peer.type = _prefs.observer_peer_type;
+    memcpy(peer.address, _prefs.observer_peer_address, sizeof(peer.address));
+    return peer;
+  }
+  bool setObserverEnabled(bool enabled) {
+    return _prefs.persistEnabled(enabled, [this] { return _cli.savePrefs(_fs); });
+  }
+  bool setObserverPeer(bool has_peer, const observer::PeerIdentity& peer) {
+    return _prefs.persistPeer(has_peer, peer, [this] { return _cli.savePrefs(_fs); });
+  }
+#endif
   void loop();
 
 #if defined(WITH_BRIDGE)
