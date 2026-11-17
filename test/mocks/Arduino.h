@@ -55,6 +55,7 @@ static inline char* ltoa(long value, char* result, int base) {
 #endif
 
 // ---- filesystem stubs -------------------------------------------------------
+#ifndef OBSERVER_TEST_OWN_FILESYSTEM
 class File {
 public:
   operator bool() const { return false; }
@@ -78,3 +79,4 @@ public:
 #ifndef FILESYSTEM
   #define FILESYSTEM FsMock
 #endif
+#endif  // OBSERVER_TEST_OWN_FILESYSTEM

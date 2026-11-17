@@ -3,6 +3,11 @@
 
 #include "MyMesh.h"
 
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+  #include <observer/ObserverTransport.h>
+  #include <observer/ObserverNodePrefs.h>
+#endif
+
 #ifdef ETHERNET_ENABLED
   #define ETHERNET_CLI_BANNER "MeshCore Repeater CLI"
   #include <helpers/nrf52/EthernetCLI.h>
@@ -118,6 +123,22 @@ void setup() {
 }
 
 void loop() {
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+  observer::transport.service();
+  char observer_command[observer::Transport::kCommandBytes];
+  if (observer::transport.takeCommand(observer_command, sizeof(observer_command))) {
+    char reply[160] = {};
+    the_mesh.handleObserverCommand(observer_command, reply);
+#if defined(SENSECAP_OBSERVER_COC_CHANNELS)
+    observer::transport.replyCoC(reinterpret_cast<const uint8_t*>(reply), strlen(reply));
+#else
+    if (reply[0]) {
+      observer::logOutput().print(reply);
+      observer::logOutput().print("\r\n");
+    }
+#endif
+  }
+#endif
   // Handle Serial CLI
   int len = strlen(command);
   // `command` must stay NUL-terminated within its bounds. If it ever isn't,
@@ -151,7 +172,10 @@ void loop() {
       the_mesh.handleCommand(0, command, reply);
     }
 #else
-    the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
+    #if defined(SENSECAP_OBSERVER_TRANSPORT)
+    if (!the_mesh.handleUsbObserverCommand(command, reply))
+  #endif
+      the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
 #endif
     if (reply[0]) {
       Serial.print("  -> "); Serial.println(reply);

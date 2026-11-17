@@ -2,6 +2,23 @@
 #include <algorithm>
 #include <helpers/sensors/LPPDataHelpers.h>
 
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+  #include <observer/ObserverCommand.h>
+  #include <observer/ObserverOta.h>
+  #include <observer/ObserverTransport.h>
+  #define OBSERVER_LOG_OUTPUT observer::logOutput()
+#else
+#define OBSERVER_LOG_OUTPUT Serial
+#endif
+
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+extern MyMesh the_mesh;
+static bool saveObserverEnabled(bool enabled) { return the_mesh.setObserverEnabled(enabled); }
+static bool saveObserverPeer(bool has_peer, const observer::PeerIdentity& identity) {
+  return the_mesh.setObserverPeer(has_peer, identity);
+}
+#endif
+
 /* ------------------------------ Config -------------------------------- */
 
 #ifndef LORA_FREQ
@@ -598,10 +615,10 @@ const char *MyMesh::getLogDateTime() {
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #if MESH_PACKET_LOGGING
-  Serial.print(getLogDateTime());
-  Serial.print(" RAW: ");
-  mesh::Utils::printHex(Serial, raw, len);
-  Serial.println();
+  OBSERVER_LOG_OUTPUT.print(getLogDateTime());
+  OBSERVER_LOG_OUTPUT.print(" RAW: ");
+  mesh::Utils::printHex(OBSERVER_LOG_OUTPUT, raw, len);
+  OBSERVER_LOG_OUTPUT.println();
 #endif
 }
 
@@ -1086,6 +1103,15 @@ void MyMesh::begin(FILESYSTEM *fs) {
   _fs = fs;
   // load persisted prefs
   _cli.loadPrefs(_fs);
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+#ifdef OBSERVER_LEGACY_PREF_KEYS
+  // Nothing else rewrites prefs.json at boot: rewrite it once so old key names are replaced.
+  if (_prefs.legacyKeysUsed() && _cli.savePrefs(_fs)) _prefs.clearLegacyKeysUsed();
+#endif
+  observer::PeerIdentity peer = observerPeer();
+  observer::transport.attachPreferences(observerEnabled(), peer, observerHasPeer());
+  observer::transport.setPreferenceCallbacks(saveObserverEnabled, saveObserverPeer);
+#endif
   acl.load(_fs, self_id);
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -1134,6 +1160,9 @@ void MyMesh::begin(FILESYSTEM *fs) {
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
+#endif
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+  if (observerEnabled()) observer::transport.beginFromPreferences("SenseCAP Observer");
 #endif
 }
 
@@ -1428,10 +1457,76 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   } else if (strcmp(command, "get dc.gate.status") == 0) {
     sprintf(reply, "> duty %d%%, gate level %d/%d", (int)getTxDutyCyclePercent(),
             (int)dc_gate_level, (int)region_map.getMaxGateLevel());
-  } else{
+  }
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+  else if (observer::handleAdminOtaCommand(command, reply)) {
+    // Existing admin/USB CLI only. The observer allowlist never reaches here.
+  }
+#endif
+  else {
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
 }
+
+#if defined(SENSECAP_OBSERVER_TRANSPORT)
+bool MyMesh::handleObserverCommand(char* command, char* reply) {
+  uint32_t epoch;
+  if (observer::parseCanonicalEpoch(command, epoch)) {
+    const uint32_t current = getRTCClock()->getCurrentTime();
+    if (epoch > current) {
+      getRTCClock()->setCurrentTime(epoch);
+      strcpy(reply, "OK - clock set");
+    } else {
+      strcpy(reply, "(ERR: clock cannot go backwards)");
+    }
+    return true;
+  }
+  if (observer::isAllowedReadCommand(command)) {
+    handleCommand(0, command, reply);
+    return true;
+  }
+  strcpy(reply, "ERR: observer operation not allowed");
+  return false;
+}
+
+bool MyMesh::handleUsbObserverCommand(char* command, char* reply) {
+  if (strcmp(command, "observer status") == 0) {
+    sprintf(reply, "enabled=%u enrolled=%u evicted=%lu/%lu truncated=%lu/%lu failed=%lu",
+            observerEnabled(), observerHasPeer(),
+            static_cast<unsigned long>(observer::transport.evictedRecords()),
+            static_cast<unsigned long>(observer::transport.evictedBytes()),
+            static_cast<unsigned long>(observer::transport.truncatedRecords()),
+            static_cast<unsigned long>(observer::transport.truncatedBytes()),
+            static_cast<unsigned long>(observer::transport.failedNotifications()));
+    return true;
+  }
+  if (strcmp(command, "observer enable") == 0) {
+    strcpy(reply, observer::transport.enable(true) ? "OK" : "ERR: observer persistence/init failed");
+    return true;
+  }
+  if (strcmp(command, "observer disable") == 0) {
+    strcpy(reply, observer::transport.enable(false) ? "OK" : "ERR: observer persistence failed");
+    return true;
+  }
+  if (strcmp(command, "observer enroll") == 0) {
+    strcpy(reply, observer::transport.beginEnrollment() ? "OK - pairing window open for 60s" : "ERR: USB enrollment unavailable");
+    return true;
+  }
+  if (strcmp(command, "observer enrollment close") == 0) {
+    strcpy(reply, observer::transport.closeEnrollment() ? "OK - enrollment closed" : "ERR: no enrollment window open");
+    return true;
+  }
+  if (strcmp(command, "observer enrollment status") == 0) {
+    strcpy(reply, observer::transport.enrollmentOpen() ? "open" : "closed");
+    return true;
+  }
+  if (strcmp(command, "observer revoke") == 0) {
+    strcpy(reply, observer::transport.revokePeer() ? "OK - peer revoked" : "ERR: peer revoke failed");
+    return true;
+  }
+  return false;
+}
+#endif
 
 void MyMesh::loop() {
 #ifdef WITH_BRIDGE

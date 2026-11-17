@@ -1,4 +1,7 @@
 #include "SerialBLEInterface.h"
+#if defined(SENSECAP_OBSERVER_COC_CHANNELS)
+#include <observer/ObserverBleRuntime.h>
+#endif
 #include <stdio.h>
 #include <string.h>
 #include "ble_gap.h"
@@ -135,8 +138,12 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
     Bluefruit.autoConnLed(true);  // true leaves the default automatic control of the LED by the Bluefruit library
   #endif
   
+#if defined(SENSECAP_OBSERVER_COC_CHANNELS)
+  if (!observer::coc_runtime::beginBluefruitOnce()) return;
+#else
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
   Bluefruit.begin();
+#endif
  
   char dev_name[32+16];
   if (strcmp(name, "@@MAC") == 0) {
@@ -179,7 +186,11 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   Bluefruit.Periph.setDisconnectCallback(onDisconnect);
   Bluefruit.Security.setSecuredCallback(onSecured);
 
+#if defined(SENSECAP_OBSERVER_COC_CHANNELS)
+  observer::coc_runtime::setLegacyCallback(onBLEEvent);
+#else
   Bluefruit.setEventCallback(onBLEEvent);
+#endif
 
   bleuart.setPermission(SECMODE_ENC_WITH_MITM, SECMODE_ENC_WITH_MITM);
   bleuart.begin();
